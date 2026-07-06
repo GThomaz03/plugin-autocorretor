@@ -32,6 +32,7 @@ export interface LastCorrection {
   editor: Editor;
   timestamp: number;
   expiresAt: number;
+  cursorOffsetBefore: number;
 }
 
 export interface CorrectionCandidate {

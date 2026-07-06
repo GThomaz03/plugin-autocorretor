@@ -122,6 +122,7 @@ export class AutoCorrect {
       from,
       to,
       settings.rejectWindowMs,
+      context.cursorOffset,
     );
   }
 
@@ -156,9 +157,7 @@ export class AutoCorrect {
         PLUGIN_ORIGIN,
       );
 
-      const restoredEnd =
-        editor.posToOffset(correction.from) + correction.original.length;
-      editor.setCursor(editor.offsetToPos(restoredEnd));
+      editor.setCursor(editor.offsetToPos(correction.cursorOffsetBefore));
 
       const words = this.ignoredStore.add(correction.original);
       void this.onIgnoredWordsChanged?.(words);
@@ -218,14 +217,23 @@ export class AutoCorrect {
     from: EditorPosition,
     to: EditorPosition,
     rejectWindowMs: number,
+    cursorOffsetBefore: number,
   ): void {
+    const replaceStart = editor.posToOffset(from);
+    const replaceEnd = editor.posToOffset(to);
+
     this.applyingCorrection = true;
     try {
       this.markSelfOriginatedChange();
       editor.replaceRange(replacement, from, to, PLUGIN_ORIGIN);
 
-      const newCursorOffset = editor.posToOffset(from) + replacement.length;
-      editor.setCursor(editor.offsetToPos(newCursorOffset));
+      this.restoreCursorAfterReplacement(
+        editor,
+        replaceStart,
+        replaceEnd,
+        replacement.length,
+        cursorOffsetBefore,
+      );
 
       this.lastCorrection = {
         original,
@@ -235,9 +243,34 @@ export class AutoCorrect {
         editor,
         timestamp: Date.now(),
         expiresAt: Date.now() + rejectWindowMs,
+        cursorOffsetBefore,
       };
     } finally {
       this.applyingCorrection = false;
+    }
+  }
+
+  /**
+   * Mantém o cursor onde o usuário estava digitando.
+   * Só ajusta pelo delta do texto substituído — nunca puxa para o início da correção.
+   */
+  private restoreCursorAfterReplacement(
+    editor: Editor,
+    replaceStart: number,
+    replaceEnd: number,
+    replacementLength: number,
+    cursorOffsetBefore: number,
+  ): void {
+    const replacedLength = replaceEnd - replaceStart;
+    const lengthDelta = replacementLength - replacedLength;
+
+    if (cursorOffsetBefore > replaceStart && cursorOffsetBefore < replaceEnd) {
+      editor.setCursor(editor.offsetToPos(replaceStart + replacementLength));
+      return;
+    }
+
+    if (cursorOffsetBefore >= replaceEnd) {
+      editor.setCursor(editor.offsetToPos(cursorOffsetBefore + lengthDelta));
     }
   }
 
