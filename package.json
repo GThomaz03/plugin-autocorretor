@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-languagetool-autocorrect",
+  "version": "0.1.0",
+  "description": "Automatic spelling correction using local LanguageTool",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run"
+  },
+  "keywords": ["obsidian", "languagetool", "autocorrect"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "esbuild": "0.25.5",
+    "obsidian": "latest",
+    "typescript": "^5.8.3",
+    "vitest": "^3.0.0"
+  }
+}
