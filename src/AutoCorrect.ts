@@ -4,7 +4,7 @@ import { PLUGIN_ORIGIN } from './constants';
 import { LanguageToolClient } from './LanguageToolClient';
 import type { IgnoredWordsStore } from './IgnoredWordsStore';
 import type { EditorContext, LastCorrection, LTMatch, PluginSettings } from './types';
-import { rangesIntersect, resolveLanguageParam } from './utils/text';
+import { pickBestReplacement, rangesIntersect, resolveLanguageParam } from './utils/text';
 
 type IgnoredWordsChangedCallback = (words: string[]) => void | Promise<void>;
 
@@ -95,22 +95,27 @@ export class AutoCorrect {
       return;
     }
 
-    const replacement = match.replacements[0]?.value;
-    if (!replacement) {
-      return;
-    }
-
     const absStart = context.contextStartOffset + match.offset;
     const absEnd = absStart + match.length;
     const from = context.editor.offsetToPos(absStart);
     const to = context.editor.offsetToPos(absEnd);
     const original = context.editor.getRange(from, to);
 
-    if (original === replacement) {
+    const replacement = pickBestReplacement(original, match.replacements);
+    if (!replacement || original === replacement) {
       return;
     }
 
-    const confidence = evaluator.evaluate(match, original, replacement);
+    const singleReplacementMatch: LTMatch = {
+      ...match,
+      replacements: [{ value: replacement }],
+    };
+
+    const confidence = evaluator.evaluate(
+      singleReplacementMatch,
+      original,
+      replacement,
+    );
     if (!confidence.isHighConfidence) {
       return;
     }
@@ -183,7 +188,7 @@ export class AutoCorrect {
     matches: LTMatch[],
   ): LTMatch | null {
     const overlapping = matches.filter((match) => {
-      if (match.replacements.length !== 1) {
+      if (match.replacements.length === 0) {
         return false;
       }
 
@@ -219,21 +224,12 @@ export class AutoCorrect {
     rejectWindowMs: number,
     cursorOffsetBefore: number,
   ): void {
-    const replaceStart = editor.posToOffset(from);
-    const replaceEnd = editor.posToOffset(to);
-
     this.applyingCorrection = true;
     try {
       this.markSelfOriginatedChange();
       editor.replaceRange(replacement, from, to, PLUGIN_ORIGIN);
-
-      this.restoreCursorAfterReplacement(
-        editor,
-        replaceStart,
-        replaceEnd,
-        replacement.length,
-        cursorOffsetBefore,
-      );
+      // Não reposiciona o cursor: o CodeMirror ajusta automaticamente pelo delta
+      // do texto substituído, preservando onde o usuário estava digitando.
 
       this.lastCorrection = {
         original,
@@ -247,30 +243,6 @@ export class AutoCorrect {
       };
     } finally {
       this.applyingCorrection = false;
-    }
-  }
-
-  /**
-   * Mantém o cursor onde o usuário estava digitando.
-   * Só ajusta pelo delta do texto substituído — nunca puxa para o início da correção.
-   */
-  private restoreCursorAfterReplacement(
-    editor: Editor,
-    replaceStart: number,
-    replaceEnd: number,
-    replacementLength: number,
-    cursorOffsetBefore: number,
-  ): void {
-    const replacedLength = replaceEnd - replaceStart;
-    const lengthDelta = replacementLength - replacedLength;
-
-    if (cursorOffsetBefore > replaceStart && cursorOffsetBefore < replaceEnd) {
-      editor.setCursor(editor.offsetToPos(replaceStart + replacementLength));
-      return;
-    }
-
-    if (cursorOffsetBefore >= replaceEnd) {
-      editor.setCursor(editor.offsetToPos(cursorOffsetBefore + lengthDelta));
     }
   }
 

@@ -32,6 +32,12 @@ describe('CA-01 — typo óbvio corrigido', () => {
     expect(result.score).toBeGreaterThanOrEqual(0.85);
   });
 
+  it('trabalo → trabalho tem alta confiança com melhor sugestão', () => {
+    const evaluator = new ConfidenceEvaluator(DEFAULT_SETTINGS.minConfidenceScore);
+    const result = evaluator.evaluate(mockMatch('trabalho'), 'trabalo', 'trabalho');
+    expect(result.isHighConfidence).toBe(true);
+  });
+
   it('extractLastWords isola a última palavra', () => {
     const text = 'Hoje fui na facudade';
     const result = extractLastWords(text, 5, text.length);
@@ -98,13 +104,36 @@ describe('CA-05 — detecção de idioma', () => {
 });
 
 describe('TC-02 — múltiplas sugestões', () => {
-  it('rejeita match com mais de uma sugestão', () => {
+  it('rejeita match quando nenhuma sugestão é próxima', () => {
     const evaluator = new ConfidenceEvaluator(DEFAULT_SETTINGS.minConfidenceScore);
     const match = mockMatch('opt1', {
       replacements: [{ value: 'opt1' }, { value: 'opt2' }],
     });
     const result = evaluator.evaluate(match, 'word', 'opt1');
     expect(result.isHighConfidence).toBe(false);
+  });
+
+  it('pickBestReplacement escolhe trabalho para trabalo', async () => {
+    const { pickBestReplacement } = await import('../src/utils/text');
+    const { normalizedLevenshteinSimilarity } = await import('../src/utils/text');
+    const reps = [
+      'travá-lo',
+      'trabalho',
+      'travado',
+      'tabalo',
+    ].map((value) => ({ value }));
+    const best = pickBestReplacement('trabalo', reps);
+    expect(best).toBe('trabalho');
+    expect(normalizedLevenshteinSimilarity('trabalo', best!)).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it('facudade com 2 sugestões escolhe faculdade', async () => {
+    const { pickBestReplacement } = await import('../src/utils/text');
+    const best = pickBestReplacement('facudade', [
+      { value: 'faculdade' },
+      { value: 'Faculdade' },
+    ]);
+    expect(best).toBe('faculdade');
   });
 });
 

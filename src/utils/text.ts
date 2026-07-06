@@ -127,6 +127,34 @@ export function normalizedLevenshteinSimilarity(a: string, b: string): number {
   return 1 - distance / maxLen;
 }
 
+/** Escolhe a sugestão mais próxima do texto original (para matches com múltiplas opções do LT) */
+export function pickBestReplacement(
+  original: string,
+  replacements: { value: string }[],
+): string | null {
+  if (replacements.length === 0) {
+    return null;
+  }
+
+  let best = replacements[0]!.value;
+  let bestSim = normalizedLevenshteinSimilarity(original, best);
+
+  for (const r of replacements.slice(1)) {
+    const sim = normalizedLevenshteinSimilarity(original, r.value);
+    if (sim > bestSim) {
+      bestSim = sim;
+      best = r.value;
+    }
+  }
+
+  // Evita aplicar sugestão irrelevante quando LT retorna dezenas de opções
+  if (replacements.length > 1 && bestSim < 0.6) {
+    return null;
+  }
+
+  return best;
+}
+
 export function rangesIntersect(
   aStart: number,
   aEnd: number,
