@@ -85,6 +85,36 @@ export function extractLastWords(
   };
 }
 
+export interface ContextToken {
+  word: string;
+  start: number;
+  end: number;
+}
+
+const WORD_BOUNDARY_CHARS = /[\s,.!?;:)\]}"'»«]/;
+
+/** Verdadeiro quando o cursor está logo após espaço ou pontuação (palavra recém-finalizada) */
+export function isAfterWordBoundary(fullText: string, cursorOffset: number): boolean {
+  if (cursorOffset < 1) {
+    return false;
+  }
+  return WORD_BOUNDARY_CHARS.test(fullText[cursorOffset - 1]!);
+}
+
+/** Tokens absolutos no trecho de contexto enviado ao LanguageTool */
+export function extractContextTokens(
+  contextText: string,
+  contextStartOffset: number,
+): ContextToken[] {
+  return tokenizeWords(contextText)
+    .filter((token) => isValidTargetWord(token.word))
+    .map((token) => ({
+      word: token.word,
+      start: contextStartOffset + token.start,
+      end: contextStartOffset + token.end,
+    }));
+}
+
 /** Palavra válida para verificação: >= 2 chars e contém letra */
 export function isValidTargetWord(word: string): boolean {
   if (word.length < 2) return false;

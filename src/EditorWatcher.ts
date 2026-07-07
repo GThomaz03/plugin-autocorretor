@@ -1,6 +1,10 @@
 import type { Editor } from 'obsidian';
 import type { EditorContext } from './types';
-import { extractLastWords, isValidTargetWord } from './utils/text';
+import {
+  extractLastWords,
+  isAfterWordBoundary,
+  isValidTargetWord,
+} from './utils/text';
 
 export class EditorWatcher {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -9,13 +13,25 @@ export class EditorWatcher {
   constructor(
     private debounceMs: number,
     private contextWordCount: number,
-    private isIgnored: (word: string) => boolean,
     private onStable: (ctx: EditorContext) => void,
   ) {}
 
   handleChange(editor: Editor): void {
     if (editor.somethingSelected()) {
       this.cancelDebounce();
+      return;
+    }
+
+    const cursor = editor.getCursor();
+    const cursorOffset = editor.posToOffset(cursor);
+    const fullText = editor.getValue();
+
+    if (isAfterWordBoundary(fullText, cursorOffset)) {
+      this.cancelDebounce();
+      const context = this.buildContext(editor);
+      if (context) {
+        this.onStable(context);
+      }
       return;
     }
 
@@ -73,10 +89,6 @@ export class EditorWatcher {
     const extracted = extractLastWords(fullText, this.contextWordCount, cursorOffset);
 
     if (!extracted.targetWord || !isValidTargetWord(extracted.targetWord)) {
-      return null;
-    }
-
-    if (this.isIgnored(extracted.targetWord)) {
       return null;
     }
 

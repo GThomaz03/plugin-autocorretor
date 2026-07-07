@@ -37,7 +37,6 @@ export default class LanguageToolAutoCorrectPlugin extends Plugin {
     this.editorWatcher = new EditorWatcher(
       this.settings.debounceMs,
       this.settings.contextWordCount,
-      (word) => this.ignoredStore.isIgnored(word),
       (ctx) => void this.autoCorrect.process(ctx),
     );
 

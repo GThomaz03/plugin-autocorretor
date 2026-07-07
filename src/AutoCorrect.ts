@@ -3,12 +3,25 @@ import { ConfidenceEvaluator } from './ConfidenceEvaluator';
 import { PLUGIN_ORIGIN } from './constants';
 import { LanguageToolClient } from './LanguageToolClient';
 import type { IgnoredWordsStore } from './IgnoredWordsStore';
+import type { ContextToken } from './utils/text';
 import type { EditorContext, LastCorrection, LTMatch, PluginSettings } from './types';
-import { pickBestReplacement, rangesIntersect, resolveLanguageParam } from './utils/text';
+import {
+  extractContextTokens,
+  pickBestReplacement,
+  rangesIntersect,
+  resolveLanguageParam,
+} from './utils/text';
 
 type IgnoredWordsChangedCallback = (words: string[]) => void | Promise<void>;
 
 const SELF_CHANGE_SUPPRESS_MS = 150;
+
+interface CorrectionCandidate {
+  from: EditorPosition;
+  to: EditorPosition;
+  original: string;
+  replacement: string;
+}
 
 export class AutoCorrect {
   private lastCorrection: LastCorrection | null = null;
@@ -56,10 +69,6 @@ export class AutoCorrect {
   }
 
   async process(context: EditorContext): Promise<void> {
-    if (this.ignoredStore.isIgnored(context.targetWord)) {
-      return;
-    }
-
     const settings = this.getSettings();
     const generation = ++this.requestGeneration;
     const language = resolveLanguageParam(settings.languageMode);
@@ -83,6 +92,14 @@ export class AutoCorrect {
       return;
     }
 
+    const tokens = extractContextTokens(
+      context.contextText,
+      context.contextStartOffset,
+    );
+    if (tokens.length === 0) {
+      return;
+    }
+
     const detectedConfidence =
       response.language.detectedLanguage?.confidence ?? 1;
     const evaluator = new ConfidenceEvaluator(
@@ -90,42 +107,19 @@ export class AutoCorrect {
       detectedConfidence,
     );
 
-    const match = this.selectMatch(context, response.matches);
-    if (!match) {
-      return;
-    }
-
-    const absStart = context.contextStartOffset + match.offset;
-    const absEnd = absStart + match.length;
-    const from = context.editor.offsetToPos(absStart);
-    const to = context.editor.offsetToPos(absEnd);
-    const original = context.editor.getRange(from, to);
-
-    const replacement = pickBestReplacement(original, match.replacements);
-    if (!replacement || original === replacement) {
-      return;
-    }
-
-    const singleReplacementMatch: LTMatch = {
-      ...match,
-      replacements: [{ value: replacement }],
-    };
-
-    const confidence = evaluator.evaluate(
-      singleReplacementMatch,
-      original,
-      replacement,
+    const candidates = this.buildCandidates(
+      context,
+      response.matches,
+      tokens,
+      evaluator,
     );
-    if (!confidence.isHighConfidence) {
+    if (candidates.length === 0) {
       return;
     }
 
-    this.applyCorrection(
+    this.applyCorrections(
       context.editor,
-      original,
-      replacement,
-      from,
-      to,
+      candidates,
       settings.rejectWindowMs,
       context.cursorOffset,
     );
@@ -183,59 +177,107 @@ export class AutoCorrect {
     this.ltClient.abortPending();
   }
 
-  private selectMatch(
+  private buildCandidates(
     context: EditorContext,
     matches: LTMatch[],
-  ): LTMatch | null {
-    const overlapping = matches.filter((match) => {
-      if (match.replacements.length === 0) {
-        return false;
+    tokens: ContextToken[],
+    evaluator: ConfidenceEvaluator,
+  ): CorrectionCandidate[] {
+    const sortedTokens = [...tokens].sort((a, b) => b.start - a.start);
+    const usedTokenStarts = new Set<number>();
+    const candidates: CorrectionCandidate[] = [];
+
+    for (const token of sortedTokens) {
+      if (this.ignoredStore.isIgnored(token.word)) {
+        continue;
       }
 
+      const overlapping = matches.filter((match) => {
+        if (match.replacements.length === 0) {
+          return false;
+        }
+
+        const absStart = context.contextStartOffset + match.offset;
+        const absEnd = absStart + match.length;
+        return rangesIntersect(absStart, absEnd, token.start, token.end);
+      });
+
+      if (overlapping.length !== 1) {
+        continue;
+      }
+
+      const match = overlapping[0]!;
       const absStart = context.contextStartOffset + match.offset;
       const absEnd = absStart + match.length;
-      return rangesIntersect(
-        absStart,
-        absEnd,
-        context.targetWordStart,
-        context.targetWordEnd,
-      );
-    });
+      const from = context.editor.offsetToPos(absStart);
+      const to = context.editor.offsetToPos(absEnd);
+      const original = context.editor.getRange(from, to);
 
-    if (overlapping.length !== 1) {
-      return null;
+      const replacement = pickBestReplacement(original, match.replacements);
+      if (!replacement || original === replacement) {
+        continue;
+      }
+
+      const singleReplacementMatch: LTMatch = {
+        ...match,
+        replacements: [{ value: replacement }],
+      };
+
+      const confidence = evaluator.evaluate(
+        singleReplacementMatch,
+        original,
+        replacement,
+      );
+      if (!confidence.isHighConfidence) {
+        continue;
+      }
+
+      if (usedTokenStarts.has(token.start)) {
+        continue;
+      }
+      usedTokenStarts.add(token.start);
+
+      candidates.push({ from, to, original, replacement });
     }
 
-    return overlapping[0] ?? null;
+    return candidates;
   }
 
   private isContextStillValid(context: EditorContext): boolean {
-    const from = context.editor.offsetToPos(context.targetWordStart);
-    const to = context.editor.offsetToPos(context.targetWordEnd);
-    return context.editor.getRange(from, to) === context.targetWord;
+    const currentSlice = context.editor
+      .getValue()
+      .slice(
+        context.contextStartOffset,
+        context.contextStartOffset + context.contextText.length,
+      );
+    return currentSlice === context.contextText;
   }
 
-  private applyCorrection(
+  private applyCorrections(
     editor: Editor,
-    original: string,
-    replacement: string,
-    from: EditorPosition,
-    to: EditorPosition,
+    candidates: CorrectionCandidate[],
     rejectWindowMs: number,
     cursorOffsetBefore: number,
   ): void {
     this.applyingCorrection = true;
     try {
       this.markSelfOriginatedChange();
-      editor.replaceRange(replacement, from, to, PLUGIN_ORIGIN);
-      // Não reposiciona o cursor: o CodeMirror ajusta automaticamente pelo delta
-      // do texto substituído, preservando onde o usuário estava digitando.
 
+      for (const candidate of candidates) {
+        editor.replaceRange(
+          candidate.replacement,
+          candidate.from,
+          candidate.to,
+          PLUGIN_ORIGIN,
+        );
+      }
+
+      const last = candidates[candidates.length - 1]!;
       this.lastCorrection = {
-        original,
-        replacement,
-        from,
-        to,
+        original: last.original,
+        replacement: last.replacement,
+        from: last.from,
+        to: last.to,
         editor,
         timestamp: Date.now(),
         expiresAt: Date.now() + rejectWindowMs,
